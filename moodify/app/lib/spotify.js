@@ -37,6 +37,28 @@ export function generateRandomString(length) {
     return text;
 }
 
+// Log response with sensitive information redacted
+function logResponse(response, url) {
+    // Only log headers and status, not body
+    const headerObj = {};
+    response.headers.forEach((value, key) => {
+        // Redact potentially sensitive headers
+        if (key.toLowerCase().includes('authorization') || 
+            key.toLowerCase().includes('cookie') || 
+            key.toLowerCase().includes('token')) {
+            headerObj[key] = '[REDACTED]';
+        } else {
+            headerObj[key] = value;
+        }
+    });
+
+    console.log(`Spotify API Response: ${url}`, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: headerObj
+    });
+}
+
 // Improved error handling for Spotify API calls
 export async function fetchFromSpotify(endpoint, token, options = {}) {
     try {
@@ -52,14 +74,26 @@ export async function fetchFromSpotify(endpoint, token, options = {}) {
             ...options
         };
 
-        // For debugging
-        console.log(`Fetching from Spotify: ${url}`);
+        // For debugging (with token redacted)
+        console.log(`Fetching from Spotify: ${url}`, {
+            method: fetchOptions.method || 'GET',
+            headers: { ...fetchOptions.headers, Authorization: '[REDACTED]' }
+        });
 
         const response = await fetch(url, fetchOptions);
+        logResponse(response, url);
 
         // Handle non-OK responses
         if (!response.ok) {
             console.warn(`Spotify API warning (${response.status}): ${url}`);
+
+            // Handle token expiration (401 Unauthorized)
+            if (response.status === 401) {
+                console.warn('Token appears to be expired or invalid');
+                // If we want to handle token refresh here, we could
+                // throw a special error type that the caller can catch
+                throw new Error('SPOTIFY_TOKEN_EXPIRED');
+            }
 
             // Special handling for 404 (not found) and 403 (forbidden)
             if (response.status === 404) {
@@ -72,6 +106,13 @@ export async function fetchFromSpotify(endpoint, token, options = {}) {
                 } else {
                     return {};
                 }
+            }
+
+            // Rate limit handling
+            if (response.status === 429) {
+                const retryAfter = response.headers.get('Retry-After');
+                console.warn(`Rate limited by Spotify. Retry after ${retryAfter} seconds`);
+                throw new Error(`Rate limited. Retry after ${retryAfter} seconds`);
             }
 
             // Try to parse error as JSON
@@ -112,6 +153,14 @@ export async function getUserProfile(token) {
 // Function to refresh an access token using a refresh token
 export async function refreshAccessToken(refreshToken) {
     try {
+        console.log('Refreshing Spotify access token');
+        
+        // Ensure client ID and secret are available
+        if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
+            console.error('Missing Spotify client credentials in environment variables');
+            throw new Error('Missing Spotify client credentials');
+        }
+
         const basicAuth = Buffer.from(
             `${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`
         ).toString('base64');
@@ -128,18 +177,100 @@ export async function refreshAccessToken(refreshToken) {
             }),
         });
 
+        // Log response status (but not content for security)
+        console.log(`Token refresh response status: ${response.status}`);
+
         if (!response.ok) {
-            const errorData = await response.json();
+            let errorMessage = `Failed to refresh token: ${response.status} ${response.statusText}`;
+            
+            try {
+                const errorData = await response.json();
+                errorMessage = `${errorMessage} - ${errorData.error || 'Unknown error'}`;
+            } catch (e) {
+                // If can't parse JSON, continue with basic error
+            }
+            
+            console.error(errorMessage);
             return {
-                error: errorData.error || 'Failed to refresh token',
+                error: errorMessage,
                 status: response.status,
             };
         }
 
-        return await response.json();
+        const tokenData = await response.json();
+        console.log('Token refreshed successfully');
+        
+        return {
+            access_token: tokenData.access_token,
+            refresh_token: tokenData.refresh_token || refreshToken, // Sometimes Spotify returns a new refresh token
+            expires_in: tokenData.expires_in,
+            token_type: tokenData.token_type
+        };
     } catch (error) {
         console.error('Error refreshing access token:', error);
         return { error: 'Internal server error during token refresh' };
+    }
+}
+
+// Function to validate and exchange an authorization code for tokens
+export async function exchangeCodeForTokens(code, redirectUri) {
+    try {
+        console.log('Exchanging authorization code for tokens');
+        
+        // Verify we have the required environment variables
+        if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
+            throw new Error('Missing Spotify client credentials in environment variables');
+        }
+        
+        // Create the basic auth header from client ID and secret
+        const basicAuth = Buffer.from(
+            `${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`
+        ).toString('base64');
+            
+        // Log the redirect URI being used (this is critical for debugging)
+        console.log(`Using redirect URI: ${redirectUri}`);
+        
+        // Make the request to exchange the code for tokens
+        const response = await fetch(SPOTIFY_ENDPOINTS.TOKEN, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Basic ${basicAuth}`,
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+                grant_type: 'authorization_code',
+                code,
+                redirect_uri: redirectUri,
+            }),
+        });
+        
+        console.log(`Token exchange response status: ${response.status}`);
+        
+        if (!response.ok) {
+            let errorText = `Failed to exchange code for token: ${response.status} ${response.statusText}`;
+            
+            try {
+                const errorData = await response.json();
+                errorText = `${errorText} - ${errorData.error || 'Unknown error'}`;
+            } catch (e) {
+                // If can't parse as JSON, continue with basic error
+            }
+            
+            throw new Error(errorText);
+        }
+        
+        const data = await response.json();
+        console.log('Successfully exchanged code for tokens');
+        
+        return {
+            access_token: data.access_token,
+            refresh_token: data.refresh_token,
+            expires_in: data.expires_in,
+            token_type: data.token_type
+        };
+    } catch (error) {
+        console.error('Error exchanging code for tokens:', error);
+        throw error;
     }
 }
 
@@ -240,6 +371,16 @@ export async function getRecommendations(token, options = {}) {
 // Create a playlist with specified tracks
 export async function createPlaylist(token, userId, name, description, tracks) {
     try {
+        // Validate inputs
+        if (!token) throw new Error('No access token provided');
+        if (!userId) throw new Error('User ID is required to create a playlist');
+        if (!name) throw new Error('Playlist name is required');
+        if (!tracks || !Array.isArray(tracks) || tracks.length === 0) {
+            throw new Error('At least one track is required to create a playlist');
+        }
+
+        console.log(`Creating playlist "${name}" for user ${userId} with ${tracks.length} tracks`);
+
         // First, create an empty playlist
         const createResponse = await fetchFromSpotify(
             `${SPOTIFY_ENDPOINTS.CREATE_PLAYLIST}${userId}/playlists`,
@@ -248,7 +389,7 @@ export async function createPlaylist(token, userId, name, description, tracks) {
                 method: 'POST',
                 body: JSON.stringify({
                     name,
-                    description,
+                    description: description || `Created by Moodify on ${new Date().toLocaleDateString()}`,
                     public: false
                 })
             }
@@ -261,15 +402,23 @@ export async function createPlaylist(token, userId, name, description, tracks) {
             throw new Error('Failed to create playlist: No playlist ID returned');
         }
 
+        console.log(`Playlist created with ID: ${playlistId}`);
+
         // Then, add tracks to the playlist
-        const trackUris = tracks.map(track =>
-            typeof track === 'string' ? `spotify:track:${track}` : track.uri || `spotify:track:${track.id}`
-        );
+        const trackUris = tracks.map(track => {
+            if (typeof track === 'string') {
+                return track.startsWith('spotify:track:') ? track : `spotify:track:${track}`;
+            } else {
+                return track.uri || `spotify:track:${track.id}`;
+            }
+        });
 
         // Spotify only allows 100 tracks at a time, so we need to chunk
         const chunkSize = 100;
         for (let i = 0; i < trackUris.length; i += chunkSize) {
             const chunk = trackUris.slice(i, i + chunkSize);
+            
+            console.log(`Adding batch of ${chunk.length} tracks to playlist (${i+1}-${i+chunk.length}/${trackUris.length})`);
 
             await fetchFromSpotify(
                 `playlists/${playlistId}/tracks`,
@@ -283,10 +432,70 @@ export async function createPlaylist(token, userId, name, description, tracks) {
             );
         }
 
+        console.log(`Successfully added ${trackUris.length} tracks to playlist ${playlistId}`);
+
         // Return the newly created playlist
         return createResponse;
     } catch (error) {
         console.error('Error creating playlist:', error);
+        throw error;
+    }
+}
+
+// Get track recommendations based on a text prompt or mood description
+export async function getRecommendationsFromPrompt(token, prompt, userTopTracks = [], limit = 10) {
+    try {
+        if (!token) throw new Error('Access token is required');
+        if (!prompt) throw new Error('Prompt is required');
+
+        // Define common audio feature targets based on mood keywords in the prompt
+        const lowerPrompt = prompt.toLowerCase();
+        let audioFeatures = {};
+
+        // Simple mood-to-audio-features mapping
+        if (lowerPrompt.includes('energetic') || lowerPrompt.includes('workout') || lowerPrompt.includes('upbeat')) {
+            audioFeatures = { energy: 0.8, valence: 0.7, tempo: 120 };
+        } else if (lowerPrompt.includes('calm') || lowerPrompt.includes('relax') || lowerPrompt.includes('sleep')) {
+            audioFeatures = { energy: 0.3, valence: 0.5, acousticness: 0.7, tempo: 80 };
+        } else if (lowerPrompt.includes('happy') || lowerPrompt.includes('cheerful') || lowerPrompt.includes('joy')) {
+            audioFeatures = { valence: 0.8, energy: 0.6 };
+        } else if (lowerPrompt.includes('sad') || lowerPrompt.includes('melancholy') || lowerPrompt.includes('somber')) {
+            audioFeatures = { valence: 0.2, mode: 0 };
+        } else if (lowerPrompt.includes('focus') || lowerPrompt.includes('concentrate') || lowerPrompt.includes('study')) {
+            audioFeatures = { instrumentalness: 0.5, energy: 0.4, acousticness: 0.6 };
+        }
+
+        // Use top tracks as seeds if available, or use genre seeds
+        const options = {
+            ...audioFeatures,
+            limit
+        };
+
+        if (userTopTracks && userTopTracks.length > 0) {
+            // Use up to 5 of the user's top tracks as seeds
+            options.seedTracks = userTopTracks.slice(0, 5).map(track => track.id);
+        } else {
+            // If no top tracks, try to infer genre from prompt
+            options.seedGenres = [];
+            
+            // Map prompt keywords to genres
+            if (lowerPrompt.includes('rock')) options.seedGenres.push('rock');
+            if (lowerPrompt.includes('pop')) options.seedGenres.push('pop');
+            if (lowerPrompt.includes('hip hop') || lowerPrompt.includes('rap')) options.seedGenres.push('hip-hop');
+            if (lowerPrompt.includes('jazz')) options.seedGenres.push('jazz');
+            if (lowerPrompt.includes('classical')) options.seedGenres.push('classical');
+            if (lowerPrompt.includes('electronic')) options.seedGenres.push('electronic');
+            
+            // If no specific genres in prompt, use some default popular genres
+            if (options.seedGenres.length === 0) {
+                options.seedGenres = ['pop', 'rock', 'indie', 'chill'];
+            }
+        }
+
+        console.log('Getting recommendations with options:', JSON.stringify(options));
+        return await getRecommendations(token, options);
+    } catch (error) {
+        console.error('Error getting recommendations from prompt:', error);
         throw error;
     }
 }

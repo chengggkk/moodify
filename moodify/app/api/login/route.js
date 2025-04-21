@@ -4,37 +4,57 @@ import { generateRandomString, SPOTIFY_ENDPOINTS, SPOTIFY_SCOPES } from '../../l
 
 export async function GET() {
   try {
-    // Generate and store a state value to protect against CSRF
+    // Generate a state value for CSRF protection
     const state = generateRandomString(16);
     
-    // Get the exact redirect URI from env
-    const redirectUri = process.env.SPOTIFY_REDIRECT_URI;
-    console.log('Using redirect URI in login:', redirectUri);
+    // IMPORTANT: Use the exact redirect URI that's registered in Spotify Dashboard
+    // NOTE: We're hardcoding this value to ensure it matches exactly
+    const redirectUri = 'https://moodify-silk.vercel.app/api/callback';
     
-    // Create the redirect URL with properly joined scopes
-    const spotifyAuthUrl = `${SPOTIFY_ENDPOINTS.AUTHORIZE}?${new URLSearchParams({
+    // Log values for debugging
+    console.log('Starting Spotify login flow');
+    console.log('Redirect URI:', redirectUri);
+    
+    const clientId = process.env.SPOTIFY_CLIENT_ID;
+    if (!clientId) {
+      console.error('SPOTIFY_CLIENT_ID is missing in environment variables');
+      return NextResponse.json(
+        { error: 'Server configuration error: Missing Spotify client ID' }, 
+        { status: 500 }
+      );
+    }
+    
+    // Build the authorization URL with explicit parameters
+    const authParams = new URLSearchParams({
       response_type: 'code',
-      client_id: process.env.SPOTIFY_CLIENT_ID,
+      client_id: clientId,
       scope: SPOTIFY_SCOPES.join(' '),
       redirect_uri: redirectUri,
       state: state,
-      show_dialog: true
-    })}`;
+      show_dialog: true // Always show the dialog to avoid caching issues
+    });
     
-    // Create a redirect response
+    const spotifyAuthUrl = `${SPOTIFY_ENDPOINTS.AUTHORIZE}?${authParams.toString()}`;
+    console.log('Auth URL generated (client_id and other details omitted for security)');
+    
+    // Create the redirect response
     const response = NextResponse.redirect(spotifyAuthUrl);
     
-    // Set cookie on the response object
+    // Set state cookie for validation
     response.cookies.set('spotify_auth_state', state, { 
       maxAge: 60 * 5, // 5 minutes
       httpOnly: true, 
-      secure: process.env.NODE_ENV === 'production',
+      secure: true,
       sameSite: 'lax'
     });
 
+    console.log('Redirecting to Spotify authorization page');
     return response;
   } catch (error) {
     console.error('Error in login API route:', error);
-    return NextResponse.json({ error: 'Internal Server Error', details: error.message }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Internal Server Error', details: error.message }, 
+      { status: 500 }
+    );
   }
 }

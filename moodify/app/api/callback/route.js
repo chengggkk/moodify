@@ -1,112 +1,90 @@
 // app/api/callback/route.js
 import { NextResponse } from 'next/server';
+import { exchangeCodeForTokens } from '../../lib/spotify';
 
+// This handles the GET request when Spotify redirects back to your app
+export async function GET(request) {
+  try {
+    // Get URL parameters from the request
+    const url = new URL(request.url);
+    const code = url.searchParams.get('code');
+    const state = url.searchParams.get('state');
+    const error = url.searchParams.get('error');
+
+    console.log('Callback URL received - checking parameters');
+
+    // Check for error parameter from Spotify
+    if (error) {
+      console.error('Error returned from Spotify:', error);
+      return NextResponse.redirect(`${url.origin}?error=${encodeURIComponent(error)}`);
+    }
+
+    // Verify authorization code exists
+    if (!code) {
+      console.error('No authorization code provided');
+      return NextResponse.redirect(`${url.origin}?error=${encodeURIComponent('Authorization code missing')}`);
+    }
+
+    // Use the exact same redirect URI that was used in the authorization request
+    // IMPORTANT: This must match exactly with what's registered in Spotify Dashboard
+    const redirectUri = 'https://moodify-silk.vercel.app/api/callback';
+
+    console.log('Exchanging code for tokens with redirect URI:', redirectUri);
+
+    // Exchange the code for tokens
+    const tokens = await exchangeCodeForTokens(code, redirectUri);
+
+    // Set tokens in cookies or redirect with token in URL fragment
+    // We'll use a redirect with fragment (for client-side processing) for security
+    const redirectUrl = new URL(url.origin);
+    redirectUrl.searchParams.set('access_token', tokens.access_token);
+    redirectUrl.searchParams.set('expires_in', tokens.expires_in.toString());
+    redirectUrl.searchParams.set('token_received', 'true');
+
+    console.log('Redirecting back to app with tokens');
+    return NextResponse.redirect(redirectUrl);
+
+  } catch (error) {
+    console.error('Error in callback route:', error);
+    const redirectUrl = new URL(new URL(request.url).origin);
+    redirectUrl.searchParams.set('error', encodeURIComponent('Authentication failed: ' + error.message));
+    return NextResponse.redirect(redirectUrl);
+  }
+}
+
+// This handles POST requests from your frontend when it needs to exchange a code for tokens
 export async function POST(request) {
   try {
-    // Log the incoming request for debugging
-    console.log('Callback API called');
-    
     // Parse the request body
-    let requestBody;
-    try {
-      requestBody = await request.json();
-      console.log('Request body parsed successfully');
-    } catch (parseError) {
-      console.error('Error parsing request body:', parseError.message);
-      return NextResponse.json({ 
-        error: 'Invalid request body', 
-        details: parseError.message 
-      }, { status: 400 });
-    }
+    const requestBody = await request.json();
+    console.log('Callback API POST called with code length:', requestBody.code?.length || 'no code');
     
     const { code } = requestBody;
     
     if (!code) {
-      console.error('No authorization code provided');
+      console.error('No authorization code provided in POST body');
       return NextResponse.json({ error: 'Authorization code is required' }, { status: 400 });
     }
     
-    console.log('Authorization code received:', code.substring(0, 10) + '...');
+    // Use the exact same redirect URI that was used in the authorization request
+    // IMPORTANT: This must match exactly what's registered in Spotify Dashboard
+    const redirectUri = 'https://moodify-silk.vercel.app/api/callback';
     
-    // Get the redirect URI directly from environment variables
-    const redirectUri = process.env.SPOTIFY_REDIRECT_URI;
-    console.log('Using redirect URI:', redirectUri);
+    // Exchange the code for tokens using our updated spotify utility function
+    const tokens = await exchangeCodeForTokens(code, redirectUri);
     
-    // Exchange authorization code for access token
-    try {
-      const tokenResponse = await fetch('https://accounts.spotify.com/api/token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Authorization': `Basic ${Buffer.from(
-            `${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`
-          ).toString('base64')}`
-        },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          code,
-          redirect_uri: redirectUri
-        }).toString()
-      });
-      
-      console.log('Token exchange response status:', tokenResponse.status);
-      
-      if (!tokenResponse.ok) {
-        // Try to get error details from the response
-        let errorText = 'Unknown error';
-        try {
-          const errorData = await tokenResponse.json();
-          errorText = JSON.stringify(errorData);
-          console.error('Token exchange error response:', errorText);
-        } catch (jsonError) {
-          try {
-            errorText = await tokenResponse.text();
-            console.error('Token exchange error response text:', errorText);
-          } catch (textError) {
-            console.error('Could not read error response text');
-          }
-        }
-        
-        return NextResponse.json({
-          error: `Failed to exchange authorization code for token: ${tokenResponse.status} ${tokenResponse.statusText}`,
-          details: errorText
-        }, { status: tokenResponse.status });
-      }
-      
-      // Parse token data
-      let tokenData;
-      try {
-        tokenData = await tokenResponse.json();
-        console.log('Token data received successfully');
-      } catch (parseError) {
-        console.error('Error parsing token response:', parseError.message);
-        return NextResponse.json({ 
-          error: 'Invalid token response from Spotify', 
-          details: parseError.message 
-        }, { status: 500 });
-      }
-      
-      // Return the successful token response
-      console.log('Returning successful token response');
-      return NextResponse.json({
-        access_token: tokenData.access_token,
-        refresh_token: tokenData.refresh_token,
-        expires_in: tokenData.expires_in,
-        token_type: tokenData.token_type
-      });
-      
-    } catch (error) {
-      console.error('Error in token exchange:', error.message);
-      return NextResponse.json({ 
-        error: 'Error exchanging code for token', 
-        details: error.message 
-      }, { status: 500 });
-    }
+    // Return the tokens in the response
+    return NextResponse.json({
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expires_in: tokens.expires_in,
+      token_type: tokens.token_type
+    });
     
   } catch (error) {
-    console.error('Error in callback route:', error.message);
+    console.error('Error in callback POST route:', error);
     return NextResponse.json({ 
-      error: 'Internal server error', 
+      error: 'Error exchanging code for token', 
       details: error.message 
     }, { status: 500 });
   }

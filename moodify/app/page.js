@@ -632,31 +632,66 @@ export default function Home() {
     setAudioFeaturesData(null);
   };
   
-  // Check for authorization code in URL when page loads
-  useEffect(() => {
-    const queryParams = new URLSearchParams(window.location.search);
-    const code = queryParams.get('code');
-    const errorParam = queryParams.get('error');
+// Add this to your Home component's useEffect that handles the token
+// This should replace your current code that checks for a code in the URL
+
+useEffect(() => {
+  // First check for tokens directly in the URL (from the callback redirect)
+  const queryParams = new URLSearchParams(window.location.search);
+  const accessToken = queryParams.get('access_token');
+  const error = queryParams.get('error');
+  const tokenReceived = queryParams.get('token_received');
+  const code = queryParams.get('code');
+  
+  // Handle any errors from the auth process
+  if (error) {
+    setError(error.replace(/_/g, ' '));
+    // Clean up the URL
+    window.history.replaceState({}, document.title, '/');
+  }
+  
+  // If we received tokens directly in the URL
+  if (accessToken && tokenReceived === 'true') {
+    console.log('Token received directly in URL');
+    const expiresIn = parseInt(queryParams.get('expires_in') || '3600');
     
-    if (errorParam) {
-      setError(errorParam.replace(/_/g, ' '));
-    }
+    // Store token and expiry
+    localStorage.setItem('spotify_access_token', accessToken);
+    const expiryTime = Date.now() + (expiresIn * 1000);
+    localStorage.setItem('spotify_token_expiry', expiryTime.toString());
     
-    // If we have a code, exchange it for an access token
-    if (code) {
-      exchangeCodeForToken(code);
-    }
+    setAccessToken(accessToken);
+    setIsLoggedIn(true);
+    fetchUserProfile(accessToken);
     
-    // Check if we already have a token in localStorage
-    const storedToken = localStorage.getItem('spotify_access_token');
-    const tokenExpiry = localStorage.getItem('spotify_token_expiry');
-    
-    if (storedToken && tokenExpiry && Number(tokenExpiry) > Date.now()) {
-      setAccessToken(storedToken);
-      setIsLoggedIn(true);
-      fetchUserProfile(storedToken);
-    }
-  }, [exchangeCodeForToken, fetchUserProfile]);
+    // Clean up the URL - remove tokens for security
+    window.history.replaceState({}, document.title, '/');
+    return;
+  }
+  
+  // If we have a code, exchange it for an access token
+  if (code) {
+    console.log('Code found in URL, exchanging for token');
+    exchangeCodeForToken(code);
+    return;
+  }
+  
+  // Check if we already have a valid token in localStorage
+  const storedToken = localStorage.getItem('spotify_access_token');
+  const tokenExpiry = localStorage.getItem('spotify_token_expiry');
+  
+  if (storedToken && tokenExpiry && Number(tokenExpiry) > Date.now()) {
+    console.log('Using stored token from localStorage');
+    setAccessToken(storedToken);
+    setIsLoggedIn(true);
+    fetchUserProfile(storedToken);
+  } else if (storedToken && tokenExpiry) {
+    // Token has expired, remove it
+    console.log('Stored token has expired');
+    localStorage.removeItem('spotify_access_token');
+    localStorage.removeItem('spotify_token_expiry');
+  }
+}, [exchangeCodeForToken, fetchUserProfile]);
   
   // Fetch user's top tracks when accessToken changes
   useEffect(() => {
