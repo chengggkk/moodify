@@ -1,10 +1,10 @@
+
 "use client";
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, useCallback } from 'react';
 import Image from 'next/image';
 import AudioFeaturesDisplay from './components/AudioFeaturesDisplay';
-
 
 // Define styles directly in the component
 const styles = {
