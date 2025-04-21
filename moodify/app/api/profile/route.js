@@ -1,6 +1,6 @@
 // app/api/profile/route.js
 import { NextResponse } from 'next/server';
-import { getUserProfile } from '../../../lib/spotify';
+import { getUserProfile } from '../../lib/spotify';
 import { cookies } from 'next/headers';
 
 export async function GET() {

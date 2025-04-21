@@ -1,6 +1,6 @@
 // app/api/refresh/route.js
 import { NextResponse } from 'next/server';
-import { refreshAccessToken } from '../../../lib/spotify';
+import { refreshAccessToken } from '../../lib/spotify';
 import { cookies } from 'next/headers';
 
 export async function GET() {
