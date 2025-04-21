@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { getUserProfile } from '../../lib/spotify';
 import { cookies } from 'next/headers';
 
-export async function GET() {
+export async function GET(request) {  // Added request parameter here
   try {
     // Get access token from cookies
     const accessToken = cookies().get('spotify_access_token')?.value;
