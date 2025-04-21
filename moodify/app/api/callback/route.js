@@ -28,6 +28,10 @@ export async function POST(request) {
     
     console.log('Authorization code received:', code.substring(0, 10) + '...');
     
+    // Get the redirect URI directly from environment variables
+    const redirectUri = process.env.SPOTIFY_REDIRECT_URI;
+    console.log('Using redirect URI:', redirectUri);
+    
     // Exchange authorization code for access token
     try {
       const tokenResponse = await fetch('https://accounts.spotify.com/api/token', {
@@ -41,7 +45,7 @@ export async function POST(request) {
         body: new URLSearchParams({
           grant_type: 'authorization_code',
           code,
-          redirect_uri: process.env.SPOTIFY_REDIRECT_URI
+          redirect_uri: redirectUri
         }).toString()
       });
       
@@ -51,10 +55,16 @@ export async function POST(request) {
         // Try to get error details from the response
         let errorText = 'Unknown error';
         try {
-          errorText = await tokenResponse.text();
+          const errorData = await tokenResponse.json();
+          errorText = JSON.stringify(errorData);
           console.error('Token exchange error response:', errorText);
-        } catch (textError) {
-          console.error('Could not read error response text');
+        } catch (jsonError) {
+          try {
+            errorText = await tokenResponse.text();
+            console.error('Token exchange error response text:', errorText);
+          } catch (textError) {
+            console.error('Could not read error response text');
+          }
         }
         
         return NextResponse.json({

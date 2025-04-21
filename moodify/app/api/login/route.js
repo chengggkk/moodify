@@ -1,18 +1,22 @@
+// app/api/login/route.js
 import { NextResponse } from 'next/server';
 import { generateRandomString, SPOTIFY_ENDPOINTS, SPOTIFY_SCOPES } from '../../lib/spotify';
-import { cookies } from 'next/headers';
 
 export async function GET() {
   try {
     // Generate and store a state value to protect against CSRF
     const state = generateRandomString(16);
     
+    // Get the exact redirect URI from env
+    const redirectUri = process.env.SPOTIFY_REDIRECT_URI;
+    console.log('Using redirect URI in login:', redirectUri);
+    
     // Create the redirect URL with properly joined scopes
     const spotifyAuthUrl = `${SPOTIFY_ENDPOINTS.AUTHORIZE}?${new URLSearchParams({
       response_type: 'code',
       client_id: process.env.SPOTIFY_CLIENT_ID,
       scope: SPOTIFY_SCOPES.join(' '),
-      redirect_uri: process.env.SPOTIFY_REDIRECT_URI,
+      redirect_uri: redirectUri,
       state: state,
       show_dialog: true
     })}`;
@@ -28,7 +32,6 @@ export async function GET() {
       sameSite: 'lax'
     });
 
-    console.log('Redirect URI:', process.env.SPOTIFY_REDIRECT_URI);
     return response;
   } catch (error) {
     console.error('Error in login API route:', error);
