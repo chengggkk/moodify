@@ -104,6 +104,45 @@ export async function fetchFromSpotify(endpoint, token, options = {}) {
     }
 }
 
+// Function to get user profile information
+export async function getUserProfile(token) {
+    return fetchFromSpotify(SPOTIFY_ENDPOINTS.ME, token);
+}
+
+// Function to refresh an access token using a refresh token
+export async function refreshAccessToken(refreshToken) {
+    try {
+        const basicAuth = Buffer.from(
+            `${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`
+        ).toString('base64');
+
+        const response = await fetch(SPOTIFY_ENDPOINTS.TOKEN, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Basic ${basicAuth}`,
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+                grant_type: 'refresh_token',
+                refresh_token: refreshToken,
+            }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            return {
+                error: errorData.error || 'Failed to refresh token',
+                status: response.status,
+            };
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error refreshing access token:', error);
+        return { error: 'Internal server error during token refresh' };
+    }
+}
+
 // Function to get user's saved tracks (library)
 export async function getUserSavedTracks(token, limit = 50) {
     return fetchFromSpotify(`${SPOTIFY_ENDPOINTS.SAVED_TRACKS}?limit=${limit}`, token);
