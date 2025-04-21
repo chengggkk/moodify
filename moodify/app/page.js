@@ -433,6 +433,7 @@ const styles = {
   },
 };
 
+
 // Toggle Switch Component
 const ToggleSwitch = ({ isOn, label, leftText, rightText, onToggle }) => {
   return (
@@ -502,6 +503,134 @@ export default function Home() {
   const [generatedPlaylist, setGeneratedPlaylist] = useState(null);
   const [aiInsights, setAiInsights] = useState([]);
   const [audioFeaturesData, setAudioFeaturesData] = useState(null);
+  const [expandedTrackId, setExpandedTrackId] = useState(null);
+  
+  // Function to fetch user profile - defined with useCallback to avoid dependency warnings
+  const fetchUserProfile = useCallback(async (token) => {
+    try {
+      const response = await fetch('https://api.spotify.com/v1/me', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+      
+      if (response.ok) {
+        const profile = await response.json();
+        setUserData(profile);
+      } else {
+        // If we get an unauthorized response, the token is invalid
+        if (response.status === 401) {
+          handleLogout();
+        }
+        const errorData = await response.json();
+        console.error('Failed to fetch user profile:', errorData);
+      }
+    } catch (error) {
+      console.error('Error fetching user profile:', error);
+    }
+  }, []);
+
+  // Function to fetch top tracks - defined with useCallback
+  const fetchTopTracks = useCallback(async () => {
+    if (!accessToken) return;
+    
+    setIsLoadingTracks(true);
+    try {
+      const response = await fetch('https://api.spotify.com/v1/me/top/tracks?time_range=medium_term&limit=5', {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setTopTracks(data.items);
+      } else {
+        // If we get an unauthorized response, the token is invalid
+        if (response.status === 401) {
+          handleLogout();
+        }
+        console.error('Failed to fetch top tracks:', await response.json());
+      }
+    } catch (error) {
+      console.error('Error fetching top tracks:', error);
+    } finally {
+      setIsLoadingTracks(false);
+    }
+  }, [accessToken]);
+
+  // Function to exchange code for token - defined with useCallback
+  const exchangeCodeForToken = useCallback(async (code) => {
+    try {
+      console.log('Exchanging code for token...');
+      
+      const response = await fetch('/api/callback', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ code }),
+      });
+      
+      // Check if the response is JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        // Not JSON - try to get text content for debugging
+        const textContent = await response.text();
+        console.error('Non-JSON response:', textContent);
+        setError('Server returned invalid response format');
+        return;
+      }
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        console.error('Token exchange error:', data);
+        setError(data.error || 'Failed to authenticate with Spotify');
+        return;
+      }
+      
+      if (data.access_token) {
+        // Store token and expiry
+        console.log('Token received successfully');
+        localStorage.setItem('spotify_access_token', data.access_token);
+        
+        // Set expiry 1 hour from now (or use expires_in from response)
+        const expiryTime = Date.now() + (data.expires_in * 1000);
+        localStorage.setItem('spotify_token_expiry', expiryTime.toString());
+        
+        setAccessToken(data.access_token);
+        setIsLoggedIn(true);
+        fetchUserProfile(data.access_token);
+        
+        // Clean up the URL
+        window.history.replaceState({}, document.title, '/');
+      } else {
+        console.error('No access token in response:', data);
+        setError('Failed to receive access token from Spotify');
+      }
+    } catch (error) {
+      console.error('Error exchanging code for token:', error);
+      setError('An error occurred during authentication');
+    }
+  }, [fetchUserProfile]);
+
+  // Function to handle logout
+  const handleLogout = () => {
+    // Clear auth data
+    localStorage.removeItem('spotify_access_token');
+    localStorage.removeItem('spotify_token_expiry');
+    setAccessToken('');
+    setIsLoggedIn(false);
+    setUserData(null);
+    setTopTracks([]);
+    // Clear recommendations
+    setRecommendations([]);
+    setRecommendationStory('');
+    setGeneratedPlaylist(null);
+    setAiInsights([]);
+    setAudioFeaturesData(null);
+  };
   
   // Check for authorization code in URL when page loads
   useEffect(() => {
@@ -527,126 +656,19 @@ export default function Home() {
       setIsLoggedIn(true);
       fetchUserProfile(storedToken);
     }
-  }, []);
+  }, [exchangeCodeForToken, fetchUserProfile]);
   
   // Fetch user's top tracks when accessToken changes
   useEffect(() => {
     if (accessToken) {
       fetchTopTracks();
     }
-  }, [accessToken]);
-  
-// In your page.js where you exchange the code for a token
-const exchangeCodeForToken = async (code) => {
-  try {
-    console.log('Exchanging code for token...');
-    
-    const response = await fetch('/api/callback', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ code }),
-    });
-    
-    // Check if the response is JSON
-    const contentType = response.headers.get('content-type');
-    if (!contentType || !contentType.includes('application/json')) {
-      // Not JSON - try to get text content for debugging
-      const textContent = await response.text();
-      console.error('Non-JSON response:', textContent);
-      setError('Server returned invalid response format');
-      return;
-    }
-    
-    const data = await response.json();
-    
-    if (!response.ok) {
-      console.error('Token exchange error:', data);
-      setError(data.error || 'Failed to authenticate with Spotify');
-      return;
-    }
-    
-    if (data.access_token) {
-      // Store token and expiry
-      console.log('Token received successfully');
-      localStorage.setItem('spotify_access_token', data.access_token);
-      
-      // Set expiry 1 hour from now (or use expires_in from response)
-      const expiryTime = Date.now() + (data.expires_in * 1000);
-      localStorage.setItem('spotify_token_expiry', expiryTime.toString());
-      
-      setAccessToken(data.access_token);
-      setIsLoggedIn(true);
-      fetchUserProfile(data.access_token);
-      
-      // Clean up the URL
-      window.history.replaceState({}, document.title, '/');
-    } else {
-      console.error('No access token in response:', data);
-      setError('Failed to receive access token from Spotify');
-    }
-  } catch (error) {
-    console.error('Error exchanging code for token:', error);
-    setError('An error occurred during authentication');
-  }
-};
-  const fetchUserProfile = async (token) => {
-    try {
-      const response = await fetch('https://api.spotify.com/v1/me', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-      
-      if (response.ok) {
-        const profile = await response.json();
-        setUserData(profile);
-      } else {
-        // If we get an unauthorized response, the token is invalid
-        if (response.status === 401) {
-          handleLogout();
-        }
-        const errorData = await response.json();
-        console.error('Failed to fetch user profile:', errorData);
-      }
-    } catch (error) {
-      console.error('Error fetching user profile:', error);
-    }
-  };
-  
-  const fetchTopTracks = async () => {
-    setIsLoadingTracks(true);
-    try {
-      const response = await fetch('https://api.spotify.com/v1/me/top/tracks?time_range=medium_term&limit=5', {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-        },
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setTopTracks(data.items);
-      } else {
-        // If we get an unauthorized response, the token is invalid
-        if (response.status === 401) {
-          handleLogout();
-        }
-        console.error('Failed to fetch top tracks:', await response.json());
-      }
-    } catch (error) {
-      console.error('Error fetching top tracks:', error);
-    } finally {
-      setIsLoadingTracks(false);
-    }
-  };
+  }, [accessToken, fetchTopTracks]);
   
   const handleLogin = () => {
     // Navigate programmatically to the login API route
     window.location.href = '/api/login';
   };
-  
-  const [expandedTrackId, setExpandedTrackId] = useState(null);
   
   const toggleTrackDetails = (trackId) => {
     if (expandedTrackId === trackId) {
@@ -655,24 +677,6 @@ const exchangeCodeForToken = async (code) => {
       setExpandedTrackId(trackId);
     }
   };
-  
-  const handleLogout = () => {
-    // Clear auth data
-    localStorage.removeItem('spotify_access_token');
-    localStorage.removeItem('spotify_token_expiry');
-    setAccessToken('');
-    setIsLoggedIn(false);
-    setUserData(null);
-    setTopTracks([]);
-    // Clear recommendations
-    setRecommendations([]);
-    setRecommendationStory('');
-    setGeneratedPlaylist(null);
-    setAiInsights([]);
-    setAudioFeaturesData(null);
-  };
-  
-  // Update this function in your Home component
 
   const generateRecommendations = async () => {
     if (!isLoggedIn) {
@@ -889,7 +893,7 @@ const exchangeCodeForToken = async (code) => {
       <main style={styles.main}>
         <h1 style={styles.title}>Generate Music Based on Your Mood</h1>
         <p style={styles.description}>
-          Describe how you're feeling or what vibe you're looking for, and we'll create the perfect playlist
+          Describe how you&apos;re feeling or what vibe you&apos;re looking for, and we&apos;ll create the perfect playlist
         </p>
         
         {error && (
@@ -992,24 +996,14 @@ const exchangeCodeForToken = async (code) => {
                   <li key={track.id} style={styles.trackItem}>
                     <span style={styles.trackNumber}>{index + 1}</span>
                     {track.album.images && track.album.images.length > 0 && (
-                      // Option 1: Using next/image (requires next.config.js setup)
                       <Image 
                         src={track.album.images[2].url} 
                         alt={track.album.name}
                         width={40}
                         height={40}
                         style={styles.trackImage}
-                        unoptimized={true} // Add this line to bypass image optimization
+                        unoptimized={true}
                       />
-                      
-                      // Option 2: Using regular img tag (uncomment to use this instead)
-                      /* <img 
-                        src={track.album.images[2].url} 
-                        alt={track.album.name}
-                        width={40}
-                        height={40}
-                        style={styles.trackImage}
-                      /> */
                     )}
                     <div style={styles.trackInfo}>
                       <div style={styles.trackName}>{track.name}</div>
@@ -1050,14 +1044,13 @@ const exchangeCodeForToken = async (code) => {
                 <li key={track.id} style={styles.trackItem}>
                   <span style={styles.trackNumber}>{index + 1}</span>
                   {track.album.images && track.album.images.length > 0 && (
-                    // Option 1: Using next/image with unoptimized flag
                     <Image 
                       src={track.album.images[2].url} 
                       alt={track.album.name}
                       width={40}
                       height={40}
                       style={styles.trackImage}
-                      unoptimized={true} // Add this line to bypass image optimization
+                      unoptimized={true}
                     />
                   )}
                   <div style={styles.trackInfo}>
