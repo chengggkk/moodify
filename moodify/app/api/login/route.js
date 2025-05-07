@@ -9,7 +9,7 @@ export async function GET() {
     
     // IMPORTANT: Use the exact redirect URI that's registered in Spotify Dashboard
     // NOTE: We're hardcoding this value to ensure it matches exactly
-    const redirectUri = 'https://moodify-silk.vercel.app/api/callback';
+    const redirectUri = 'http://127.0.0.1:3000/api/callback';
     
     // Log values for debugging
     console.log('Starting Spotify login flow');
