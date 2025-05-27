@@ -45,8 +45,8 @@ const AudioFeaturesDisplay = ({ features }) => {
               fontSize: '0.7rem',
               color: 'rgba(255, 255, 255, 0.7)'
             }}>
-              <span>{config.name}</span>
-              <span>{percentage}%</span>
+              <span style={{color: "#7A7687"}}>{config.name}</span>
+              <span style={{color: "#7A7687"}}>{percentage}%</span>
             </div>
             <div style={{
               height: '0.3rem',
